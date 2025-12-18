@@ -1,0 +1,65 @@
+name: Sync Upstream with Conditional Backup (Preserve Self Workflow)
+
+on:
+  schedule:
+    # 每天 UTC 03:00（北京时间 11:00）
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add and fetch upstream
+        run: |
+          git remote add upstream ${{ vars.UPSTREAM_REPO }} || true
+          git fetch upstream
+
+      - name: Compare upstream and local main
+        id: compare
+        run: |
+          LOCAL_HASH=$(git rev-parse HEAD)
+          UPSTREAM_HASH=$(git rev-parse upstream/main)
+
+          echo "Local:    $LOCAL_HASH"
+          echo "Upstream: $UPSTREAM_HASH"
+
+          if [ "$LOCAL_HASH" != "$UPSTREAM_HASH" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create backup branch (only if changed)
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          DATE=$(date +'%Y-%m-%d')
+          BACKUP_BRANCH="backup/${DATE}"
+
+          git branch $BACKUP_BRANCH HEAD
+          git push origin $BACKUP_BRANCH
+
+      - name: Sync upstream but keep self workflow
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          git checkout main
+          git checkout upstream/main -- .
+          git restore .github/workflows/sync-upstream.yml
+          git commit -m "Sync upstream (preserve sync workflow)"
+          git push origin main
+
+      - name: No changes detected
+        if: steps.compare.outputs.changed == 'false'
+        run: |
+          echo "Upstream unchanged. Nothing to do."
