@@ -1,0 +1,63 @@
+name: Sync Upstream with Conditional Backup
+
+on:
+  schedule:
+    # 每天 UTC 03:00 执行（北京时间 11:00）
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add and fetch upstream
+        run: |
+          git remote add upstream ${{ vars.UPSTREAM_REPO }} || true
+          git fetch upstream
+
+      - name: Compare upstream and local main
+        id: compare
+        run: |
+          LOCAL_HASH=$(git rev-parse origin/main)
+          UPSTREAM_HASH=$(git rev-parse upstream/main)
+
+          echo "LOCAL_HASH=$LOCAL_HASH"
+          echo "UPSTREAM_HASH=$UPSTREAM_HASH"
+
+          if [ "$LOCAL_HASH" != "$UPSTREAM_HASH" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create backup branch (only if upstream changed)
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          DATE=$(date +'%Y-%m-%d')
+          BACKUP_BRANCH="backup/${DATE}"
+
+          git branch $BACKUP_BRANCH origin/main
+          git push origin $BACKUP_BRANCH
+
+      - name: Reset main to upstream/main
+        if: steps.compare.outputs.changed == 'true'
+        run: |
+          git checkout main
+          git reset --hard upstream/main
+          git push origin main --force
+
+      - name: No changes detected
+        if: steps.compare.outputs.changed == 'false'
+        run: |
+          echo "Upstream unchanged. No backup created. No sync needed."
